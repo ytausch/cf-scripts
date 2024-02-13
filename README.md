@@ -46,6 +46,16 @@ The local debugging functionality is still work in progress and might not work f
 Currently, the following commands are supported and tested:
 - `update-upstream-versions`
 
+### Local MongoDB
+If you need a local MongoDB instance for testing during development, use the Docker compose file provided
+for development:
+```bash
+cd dev
+docker compose up -d
+
+export MONGODB_CONNECTION_STRING="mongodb://127.0.0.1:27017/?directConnection=true&serverSelectionTimeoutMS=2000"
+```
+
 ## What has the bot done recently?
 
 Check out its [PRs](https://github.com/pulls?utf8=%E2%9C%93&q=is%3Aopen+is%3Apr+author%3Aregro-cf-autotick-bot+archived%3Afalse+), its currently [running jobs](https://github.com/regro/cf-scripts/actions?query=is%3Ain_progress++), and the [status page](https://conda-forge.org/status/#current_migrations)!

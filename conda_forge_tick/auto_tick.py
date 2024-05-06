@@ -1423,18 +1423,31 @@ def _setup_limits():
         resource.setrlimit(resource.RLIMIT_AS, (limit_int, limit_int))
 
 
-def _update_nodes_with_bot_rerun(gx: nx.DiGraph):
-    """Go through all the open PRs and check if they are rerun"""
+def _update_nodes_with_bot_rerun(gx: nx.DiGraph, package: Optional[str] = None):
+    """
+    Go through all the open PRs and check if they are rerun.
+    :param package: If not None, only update the graph for that package.
+    """
 
     print("processing bot-rerun labels", flush=True)
 
-    for i, (name, node) in enumerate(gx.nodes.items()):
+    if package is not None:
+        try:
+            node_items = [(package, gx.nodes[package])]
+        except KeyError:
+            logger.error(f"BOT-RERUN : package {package} not found in graph")
+            return
+    else:
+        node_items = gx.nodes.items()
+
+    for name, node in node_items:
         # logger.info(
-        #     f"node: {i} memory usage: "
+        #     f"node memory usage: "
         #     f"{psutil.Process().memory_info().rss // 1024 ** 2}MB",
         # )
         with node["payload"] as payload:
             if payload.get("archived", False):
+                logger.debug(f"BOT-RERUN : Skipping archived package {name}")
                 continue
             with payload["pr_info"] as pri, payload["version_pr_info"] as vpri:
                 # reset bad
@@ -1484,17 +1497,32 @@ def _filter_ignored_versions(attrs, version):
         return version
 
 
-def _update_nodes_with_new_versions(gx):
-    """Updates every node with it's new version (when available)"""
+def _update_nodes_with_new_versions(gx: nx.DiGraph, package: Optional[str] = None):
+    """
+    Update every node with its new version (when available)
+    :param package: If not None, only update the graph for that package.
+    """
 
     print("updating nodes with new versions", flush=True)
 
-    version_nodes = get_all_keys_for_hashmap("versions")
+    if package is not None:
+        if not is_key_in_hashmap("versions", package):
+            logger.warning(
+                f"package {package} not found in versions, skipping update nodes with new versions"
+            )
+            return
+
+        version_nodes = [package]
+    else:
+        version_nodes = get_all_keys_for_hashmap("versions")
 
     for node in version_nodes:
         version_data = LazyJson(f"versions/{node}.json").data
         with gx.nodes[f"{node}"]["payload"] as attrs:
             if attrs.get("archived", False):
+                logger.debug(
+                    f"update nodes with new version: Skipping archived package {node}"
+                )
                 continue
             with attrs["version_pr_info"] as vpri:
                 version_from_data = version_data.get("new_version", False)
@@ -1605,13 +1633,13 @@ def _remove_closed_pr_json(package: Optional[str] = None):
 
 def _update_graph_with_pr_info(package: Optional[str] = None):
     """
-    TODO: What happens here?
+    Update the PR information for every node in the graph.
     If package is not None, only update the metadata for that package.
     """
     _remove_closed_pr_json(package)
     gx = load_existing_graph()
-    _update_nodes_with_bot_rerun(gx)
-    _update_nodes_with_new_versions(gx)
+    _update_nodes_with_bot_rerun(gx, package)
+    _update_nodes_with_new_versions(gx, package)
     dump_graph(gx)
 
 

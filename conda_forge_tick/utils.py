@@ -754,8 +754,6 @@ def dump_graph_json(gx: nx.DiGraph, filename: str = "graph.json") -> None:
 def dump_graph(
     gx: nx.DiGraph,
     filename: str = "graph.json",
-    tablename: str = "graph",
-    region: str = "us-east-2",
 ) -> None:
     dump_graph_json(gx, filename)
 

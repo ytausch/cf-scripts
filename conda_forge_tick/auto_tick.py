@@ -18,6 +18,7 @@ from typing import (
     MutableMapping,
     MutableSequence,
     MutableSet,
+    Optional,
     Sequence,
     Set,
     Tuple,
@@ -31,6 +32,7 @@ from .cli_context import CliContext
 from .lazy_json_backends import (
     LazyJson,
     get_all_keys_for_hashmap,
+    is_key_in_hashmap,
     lazy_json_transaction,
     remove_key_for_hashmap,
 )
@@ -1513,46 +1515,85 @@ def _update_nodes_with_new_versions(gx):
                         vpri["new_version"] = version_from_data
 
 
-def _remove_closed_pr_json():
+def _remove_closed_pr_json_single(pr_lazy_json: LazyJson):
+    """
+    For a Lazy JSON object that represents Pull Request (PR) information, remove the pr_json files that relate to
+    closed PRs and all references to them.
+    :param pr_lazy_json: Lazy JSON object representing PR information, should be from pr_info or version_pr_info
+    """
+    with lazy_json_transaction():
+        with pr_lazy_json as pr_json:
+            for pr_ind in range(len(pr_json.get("PRed", []))):
+                pr = pr_json["PRed"][pr_ind].get("PR", None)
+                if (
+                    pr is not None
+                    and isinstance(pr, LazyJson)
+                    and (pr.get("state", None) == "closed" or pr.data == {})
+                ):
+                    pr_json["PRed"][pr_ind]["PR"] = {
+                        "state": "closed",
+                        "number": pr.get("number", None),
+                        "labels": [{"name": lb["name"]} for lb in pr.get("labels", [])],
+                    }
+                    assert len(pr.file_name.split("/")) == 2
+                    assert pr.file_name.split("/")[0] == "pr_json"
+                    assert pr.file_name.split("/")[1].endswith(".json")
+                    pr_json_node = pr.file_name.split("/")[1][: -len(".json")]
+                    del pr
+                    remove_key_for_hashmap(
+                        "pr_json",
+                        pr_json_node,
+                    )
+
+
+def _remove_closed_pr_json(package: Optional[str] = None):
+    """
+    For every pr_json file, remove the pr_json files that relate to closed PRs and all references to them.
+    :param package: If not None, only update the graph for that package.
+    """
     print("collapsing closed PR json", flush=True)
 
     # first we go from nodes to pr json and update the pr info and remove the data
-    name_nodes = [
-        ("pr_info", get_all_keys_for_hashmap("pr_info")),
-        ("version_pr_info", get_all_keys_for_hashmap("version_pr_info")),
-    ]
+    if package is None:
+        name_nodes = [
+            ("pr_info", get_all_keys_for_hashmap("pr_info")),
+            ("version_pr_info", get_all_keys_for_hashmap("version_pr_info")),
+        ]
+    else:
+        pr_info_packages = [package] if is_key_in_hashmap("pr_info", package) else []
+        version_pr_info_packages = (
+            [package] if is_key_in_hashmap("version_pr_info", package) else []
+        )
+        name_nodes = [
+            ("pr_info", pr_info_packages),
+            ("version_pr_info", version_pr_info_packages),
+        ]
+
+        if not pr_info_packages:
+            logger.info(
+                f"package {package} not found in pr_info, skipping remove closed pr_json"
+            )
+        if not version_pr_info_packages:
+            logger.info(
+                f"package {package} not found in version_pr_info, skipping remove closed pr_json"
+            )
+
     for name, nodes in name_nodes:
         for node in nodes:
-            lzj_pri = LazyJson(f"{name}/{node}.json")
-            with lazy_json_transaction():
-                with lzj_pri as pri:
-                    for pr_ind in range(len(pri.get("PRed", []))):
-                        pr = pri["PRed"][pr_ind].get("PR", None)
-                        if (
-                            pr is not None
-                            and isinstance(pr, LazyJson)
-                            and (pr.get("state", None) == "closed" or pr.data == {})
-                        ):
-                            pri["PRed"][pr_ind]["PR"] = {
-                                "state": "closed",
-                                "number": pr.get("number", None),
-                                "labels": [
-                                    {"name": lb["name"]} for lb in pr.get("labels", [])
-                                ],
-                            }
-                            assert len(pr.file_name.split("/")) == 2
-                            assert pr.file_name.split("/")[0] == "pr_json"
-                            assert pr.file_name.split("/")[1].endswith(".json")
-                            pr_json_node = pr.file_name.split("/")[1][: -len(".json")]
-                            del pr
-                            remove_key_for_hashmap(
-                                "pr_json",
-                                pr_json_node,
-                            )
+            pr_lazy_json = LazyJson(f"{name}/{node}.json")
+            _remove_closed_pr_json_single(pr_lazy_json)
 
     # at this point, any json blob referenced in the pr info is state != closed
     # so we can remove anything that is empty or closed
-    nodes = get_all_keys_for_hashmap("pr_json")
+    # This is a bit redundant, but we want to be safe.
+    if package is None:
+        nodes = get_all_keys_for_hashmap("pr_json")
+    else:
+        nodes = [package] if is_key_in_hashmap("pr_json", package) else []
+        if not nodes:
+            logger.debug(
+                f"package {package} not found in pr_json, skipping additional remove closed pr_json"
+            )
     for node in nodes:
         pr = LazyJson(f"pr_json/{node}.json")
         if pr.get("state", None) == "closed" or pr.data == {}:
@@ -1562,22 +1603,26 @@ def _remove_closed_pr_json():
             )
 
 
-def _update_graph_with_pr_info():
-    _remove_closed_pr_json()
+def _update_graph_with_pr_info(package: Optional[str] = None):
+    """
+    TODO: What happens here?
+    If package is not None, only update the metadata for that package.
+    """
+    _remove_closed_pr_json(package)
     gx = load_existing_graph()
     _update_nodes_with_bot_rerun(gx)
     _update_nodes_with_new_versions(gx)
     dump_graph(gx)
 
 
-def main(ctx: CliContext) -> None:
+def main(ctx: CliContext, package: Optional[str] = None) -> None:
     global START_TIME
     START_TIME = time.time()
 
     _setup_limits()
 
     with fold_log_lines("updating graph with PR info"):
-        _update_graph_with_pr_info()
+        _update_graph_with_pr_info(package)
 
     mctx, temp, migrators = initialize_migrators(
         dry_run=ctx.dry_run,

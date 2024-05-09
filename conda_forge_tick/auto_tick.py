@@ -986,52 +986,9 @@ def create_migration_yaml_creator(
     print(" ", flush=True)
 
 
-def initialize_migrators(
-    dry_run: bool = False,
-) -> Tuple[MigratorSessionContext, list, MutableSequence[Migrator]]:
-    temp = glob.glob("/tmp/*")
-    gx = load_existing_graph()
-    smithy_version: str = eval_cmd(["conda", "smithy", "--version"]).strip()
-    pinning_version: str = cast(
-        str,
-        json.loads(eval_cmd(["conda", "list", "conda-forge-pinning", "--json"]))[0][
-            "version"
-        ],
-    )
-
-    migrators: List[Migrator] = []
-
-    with fold_log_lines("making alt-arch migrators"):
-        add_arch_migrate(migrators, gx)
-
-    with fold_log_lines("making replacement migrators"):
-        add_replacement_migrator(
-            migrators,
-            gx,
-            cast("PackageName", "build"),
-            cast("PackageName", "python-build"),
-            "The conda package name 'build' is deprecated "
-            "and too generic. Use 'python-build instead.'",
-        )
-
-    pinning_migrators: List[Migrator] = []
-    with fold_log_lines("making pinning migrators"):
-        migration_factory(pinning_migrators, gx)
-
-    with fold_log_lines("making pinnings repo migrators"):
-        create_migration_yaml_creator(migrators=pinning_migrators, gx=gx)
-
-    with fold_log_lines("migration graph sizes"):
-        print("rebuild migration graph sizes:", flush=True)
-        for m in migrators + pinning_migrators:
-            if isinstance(m, GraphMigrator):
-                print(
-                    f'    {getattr(m, "name", m)} graph size: '
-                    f'{len(getattr(m, "graph", []))}',
-                    flush=True,
-                )
-        print(" ", flush=True)
-
+def _make_version_migrator(
+    dry_run: bool, gx: nx.DiGraph, pinning_version: str, smithy_version: str
+) -> Tuple[MigratorSessionContext, Version]:
     with fold_log_lines("making version migrator"):
         mctx = MigratorSessionContext(
             graph=gx,
@@ -1072,10 +1029,70 @@ def initialize_migrators(
             ],
         )
 
-        random.shuffle(pinning_migrators)
-        migrators = [version_migrator] + migrators + pinning_migrators
-
         print(" ", flush=True)
+
+    return mctx, version_migrator
+
+
+def initialize_migrators(
+    dry_run: bool = False,
+    version_only: bool = False,
+) -> Tuple[MigratorSessionContext, list, MutableSequence[Migrator]]:
+    temp = glob.glob("/tmp/*")
+    gx = load_existing_graph()
+    smithy_version: str = eval_cmd(["conda", "smithy", "--version"]).strip()
+    pinning_version: str = cast(
+        str,
+        json.loads(eval_cmd(["conda", "list", "conda-forge-pinning", "--json"]))[0][
+            "version"
+        ],
+    )
+
+    if version_only:
+        mctx, version_migrator = _make_version_migrator(
+            dry_run, gx, pinning_version, smithy_version
+        )
+        return mctx, temp, [version_migrator]
+
+    migrators: List[Migrator] = []
+
+    with fold_log_lines("making alt-arch migrators"):
+        add_arch_migrate(migrators, gx)
+
+    with fold_log_lines("making replacement migrators"):
+        add_replacement_migrator(
+            migrators,
+            gx,
+            cast("PackageName", "build"),
+            cast("PackageName", "python-build"),
+            "The conda package name 'build' is deprecated "
+            "and too generic. Use 'python-build instead.'",
+        )
+
+    pinning_migrators: List[Migrator] = []
+    with fold_log_lines("making pinning migrators"):
+        migration_factory(pinning_migrators, gx)
+
+    with fold_log_lines("making pinnings repo migrators"):
+        create_migration_yaml_creator(migrators=pinning_migrators, gx=gx)
+
+    with fold_log_lines("migration graph sizes"):
+        print("rebuild migration graph sizes:", flush=True)
+        for m in migrators + pinning_migrators:
+            if isinstance(m, GraphMigrator):
+                print(
+                    f'    {getattr(m, "name", m)} graph size: '
+                    f'{len(getattr(m, "graph", []))}',
+                    flush=True,
+                )
+        print(" ", flush=True)
+
+    mctx, version_migrator = _make_version_migrator(
+        dry_run, gx, pinning_version, smithy_version
+    )
+
+    random.shuffle(pinning_migrators)
+    migrators = [version_migrator] + migrators + pinning_migrators
 
     return mctx, temp, migrators
 
@@ -1149,7 +1166,12 @@ def _over_time_limit():
     return _now - START_TIME > TIMEOUT
 
 
-def _run_migrator(migrator, mctx, temp, time_per, dry_run):
+def _run_migrator(
+    migrator, mctx, temp, time_per, dry_run, package: Optional[str] = None
+):
+    """
+    If package is not None, only run the migrator for that package.
+    """
     if hasattr(migrator, "name"):
         assert isinstance(migrator.name, str)
         migrator_name = migrator.name.lower().replace(" ", "")
@@ -1185,6 +1207,14 @@ def _run_migrator(migrator, mctx, temp, time_per, dry_run):
         effective_graph = mmctx.effective_graph
 
         possible_nodes = list(migrator.order(effective_graph, mctx.graph))
+
+        if package is not None:
+            if package not in possible_nodes:
+                logger.warning(
+                    f"Package {package} not in possible nodes for migrator {migrator_name}. Skipping."
+                )
+                return
+            possible_nodes = [package]
 
         # version debugging info
         if isinstance(migrator, Version):
@@ -1268,7 +1298,7 @@ def _run_migrator(migrator, mctx, temp, time_per, dry_run):
                         )
                         try:
                             # Don't bother running if we are at zero
-                            if get_github_api_requests_left() == 0:
+                            if not dry_run and get_github_api_requests_left() == 0:
                                 break
                             migrator_uid, pr_json = run(
                                 feedstock_ctx=fctx,
@@ -1643,7 +1673,12 @@ def _update_graph_with_pr_info(package: Optional[str] = None):
     dump_graph(gx)
 
 
-def main(ctx: CliContext, package: Optional[str] = None) -> None:
+def main(
+    ctx: CliContext, package: Optional[str] = None, version_only: bool = False
+) -> None:
+    """
+    If version_only is True, only run the version migrator.
+    """
     global START_TIME
     START_TIME = time.time()
 
@@ -1654,6 +1689,7 @@ def main(ctx: CliContext, package: Optional[str] = None) -> None:
 
     mctx, temp, migrators = initialize_migrators(
         dry_run=ctx.dry_run,
+        version_only=version_only,
     )
 
     # compute the time per migrator
@@ -1695,6 +1731,7 @@ def main(ctx: CliContext, package: Optional[str] = None) -> None:
             temp,
             time_per_migrator[mg_ind],
             ctx.dry_run,
+            package=package,
         )
         if good_prs > 0:
             pass

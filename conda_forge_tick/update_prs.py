@@ -13,7 +13,7 @@ from conda_forge_tick.cli_context import CliContext
 from conda_forge_tick.git_utils import (
     close_out_dirty_prs,
     close_out_labels,
-    is_github_api_limit_reached,
+    github_backend,
     refresh_pr,
 )
 
@@ -86,10 +86,10 @@ def _update_pr(update_function, dry_run, gx, job, n_jobs):
                         tqdm.tqdm.write(f"Updated PR json for {name}: {res['id']}")
                     with pr_json as attrs:
                         attrs.update(**res)
-            except (github3.GitHubError, github.GithubException) as e:
+            except (github3.GitHubError, github.GithubException):
                 logger.error(f"GITHUB ERROR ON FEEDSTOCK: {name}")
                 failed_refresh += 1
-                if is_github_api_limit_reached(e):
+                if github_backend().is_api_limit_reached():
                     break
             except (github3.exceptions.ConnectionError, github.GithubException):
                 logger.error(f"GITHUB ERROR ON FEEDSTOCK: {name}")

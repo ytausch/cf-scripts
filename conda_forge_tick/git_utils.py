@@ -640,12 +640,6 @@ def get_repo(
         Feedstock context used for constructing feedstock urls, etc.
     branch : str
         The branch to be made.
-    protocol : str, optional
-        The git protocol to use, defaults to ``ssh``
-    pull_request : bool, optional
-        If true issue pull request, defaults to true
-    fork : bool
-        If true create a fork, defaults to true
     base_branch : str, optional
         The base branch from which to make the new branch.
 

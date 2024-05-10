@@ -61,9 +61,8 @@ from conda_forge_tick.feedstock_parser import BOOTSTRAP_MAPPINGS
 from conda_forge_tick.git_utils import (
     GIT_CLONE_DIR,
     comment_on_pr,
-    get_github_api_requests_left,
     get_repo,
-    is_github_api_limit_reached,
+    github_backend,
     push_repo,
 )
 from conda_forge_tick.migrators import (
@@ -1292,7 +1291,7 @@ def _run_migrator(
                         )
                         try:
                             # Don't bother running if we are at zero
-                            if not dry_run and get_github_api_requests_left() == 0:
+                            if github_backend().is_api_limit_reached():
                                 break
                             migrator_uid, pr_json = run(
                                 feedstock_ctx=fctx,
@@ -1343,7 +1342,10 @@ def _run_migrator(
                                     "GITHUB ERROR ON FEEDSTOCK: %s",
                                     fctx.feedstock_name,
                                 )
-                                if is_github_api_limit_reached(e):
+                                if github_backend().is_api_limit_reached():
+                                    logger.warning(
+                                        "Error: Github API limit reached.", exc_info=e
+                                    )
                                     break
                         except URLError as e:
                             logger.exception("URLError ERROR")
@@ -1427,7 +1429,7 @@ def _run_migrator(
                             except Exception:
                                 pass
 
-                if get_github_api_requests_left() == 0:
+                if github_backend().is_api_limit_reached():
                     break
 
         print("\n", flush=True)
@@ -1741,5 +1743,5 @@ def main(
             #     ],
             # )
 
-    logger.info("API Calls Remaining: %d", get_github_api_requests_left())
+    logger.info("API Calls Remaining: %d", github_backend().get_api_requests_left())
     logger.info("Done")

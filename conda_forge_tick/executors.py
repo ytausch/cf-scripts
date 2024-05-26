@@ -16,7 +16,6 @@ class DummyLock:
 
 TRLOCK = TRLock()
 PRLOCK = DummyLock()
-DLOCK = DummyLock()
 
 
 logger = logging.getLogger(__name__)
@@ -27,18 +26,12 @@ def _init_process(lock):
     PRLOCK = lock
 
 
-def _init_dask(lock):
-    global DLOCK
-    DLOCK = lock
-
-
 @contextlib.contextmanager
-def executor(kind: str, max_workers: int, daemon=True) -> typing.Iterator[Executor]:
+def executor(kind: str, max_workers: int) -> typing.Iterator[Executor]:
     """General purpose utility to get an executor with its as_completed handler
 
     This allows us to easily use other executors as needed.
     """
-    global DLOCK
     global PRLOCK
 
     if kind == "thread":
@@ -54,24 +47,5 @@ def executor(kind: str, max_workers: int, daemon=True) -> typing.Iterator[Execut
         ) as pool_p:
             yield pool_p
         PRLOCK = DummyLock()
-    elif kind in ["dask", "dask-process", "dask-thread"]:
-        import dask
-        import distributed
-        from distributed.cfexecutor import ClientExecutor
-
-        processes = kind == "dask" or kind == "dask-process"
-
-        with dask.config.set({"distributed.worker.daemon": daemon}):
-            with distributed.LocalCluster(
-                n_workers=max_workers,
-                processes=processes,
-            ) as cluster:
-                with distributed.Client(cluster) as client:
-                    from distributed import Lock as DLock
-
-                    lock = DLock(client=client)
-                    client.run(_init_dask, lock)
-                    yield ClientExecutor(client)
-                DLOCK = DummyLock()
     else:
         raise NotImplementedError("That kind is not implemented")

@@ -81,6 +81,7 @@ jobs:
           export BOT_TOKEN=${TEST_BOT_TOKEN_VAL}
           pytest \
             -v \
+            -n auto \
             --cov=conda_forge_tick \
             --cov=tests \
             --cov-config=.coveragerc \

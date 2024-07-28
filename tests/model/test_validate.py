@@ -147,10 +147,14 @@ def pytest_generate_tests(metafunc):
             f"Some feedstocks are mentioned as bad feedstock but do not exist: {nonexistent_bad_feedstocks}"
         )
 
+    # sort the packages to make the test order deterministic
+    # (required for pytest-xdist parallelization)
+    packages_sorted = list(sorted(packages))
+
     if "valid_feedstock" in metafunc.fixturenames:
         parameters: list[tuple[PerPackageModel, str]] = []
         for model in PER_PACKAGE_MODELS:
-            for package in packages:
+            for package in packages_sorted:
                 if package not in model.bad_feedstocks:
                     parameters.append((model, package))
 
@@ -163,7 +167,7 @@ def pytest_generate_tests(metafunc):
     if "invalid_feedstock" in metafunc.fixturenames:
         parameters: list[tuple[PerPackageModel, str]] = []
         for model in PER_PACKAGE_MODELS:
-            for package in packages:
+            for package in packages_sorted:
                 if package in model.bad_feedstocks:
                     parameters.append((model, package))
 

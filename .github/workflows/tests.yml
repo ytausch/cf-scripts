@@ -82,6 +82,7 @@ jobs:
           pytest \
             -v \
             -n auto \
+            --randomly-seed=${{ github.run_id }} \
             --cov=conda_forge_tick \
             --cov=tests \
             --cov-config=.coveragerc \

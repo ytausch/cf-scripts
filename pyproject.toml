@@ -37,6 +37,11 @@ write_to_template = "__version__ = '{version}'\n"
 [tool.pytest_env]
 CF_TICK_PYTEST = "true"
 
+[tool.pytest.ini_options]
+markers = [
+    "serial: these tests are not run in parallel",
+]
+
 [tool.ruff]
 extend-exclude = ["conda_forge_tick/migrators/disabled/legacy.py"]
 

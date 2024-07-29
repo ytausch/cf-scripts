@@ -68,5 +68,6 @@ dependencies:
   - pytest-xdist
   - pytest-cov
   - pytest-env
+  - pytest-randomly
   - setuptools_scm>=7
   - python-build

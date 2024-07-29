@@ -84,6 +84,7 @@ jobs:
           export BOT_TOKEN=${TEST_BOT_TOKEN_VAL}
           pytest \
             -v \
+            -n auto \
             --splits 4 --group ${{ matrix.group }} \
             --splitting-algorithm least_duration \
             --randomly-seed=${{ github.run_id }} \

@@ -2,8 +2,8 @@ name: bot-pypi-mapping
 
 on:
   schedule:
-    - cron: '42 * * * *'
-  workflow_dispatch: null
+  #  - cron: '42 * * * *'
+  #workflow_dispatch: null
 
 concurrency: bot-pypi-mapping
 

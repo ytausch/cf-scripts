@@ -2,9 +2,9 @@ name: release
 
 on:
   workflow_dispatch: null
-  push:
-    branches:
-      - master
+  #push:
+  #  branches:
+  #    - master
 
 env:
   PY_COLORS: "1"

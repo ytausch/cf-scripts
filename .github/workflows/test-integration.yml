@@ -1,0 +1,211 @@
+name: Integration Tests
+on:
+  push:
+    branches:
+      - master
+  pull_request: null
+  merge_group: null
+
+
+# Integration tests interact with GitHub resources in the integration test infrastructure and therefore
+# cannot run concurrently with other integration tests.
+concurrency:
+  group: cf-scripts-integration-tests
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash -leo pipefail {0}
+
+env:
+  # Test Instrumentation
+  # Note: This passes secrets to steps that don't need them.
+  # We would not do this in a production setting.
+  GH_TOKEN_STAGING_CONDA_FORGE: ${{ secrets.GH_TOKEN_STAGING_CONDA_FORGE }}
+  GH_TOKEN_STAGING_BOT_USER: ${{ secrets.GH_TOKEN_STAGING_BOT_USER }}
+  GH_TOKEN_STAGING_REGRO: ${{ secrets.GH_TOKEN_STAGING_REGRO }}
+  # Bot
+  CF_TICK_OVERRIDE_CONDA_FORGE_ORG: conda-forge-bot-staging
+  CF_TICK_GRAPH_DATA_BACKENDS: file
+  CF_TICK_CONTAINER_NAME: conda-forge-tick
+  CF_TICK_CONTAINER_TAG: test
+  # Deploy to GitHub step
+  DEPLOY_REPO: regro-staging/cf-graph-countyfair
+  RUN_URL: "https://github.com/regro/cf-scripts/actions/runs/${{ github.run_id }}"
+  # Install Bot Code step
+  CF_GRAPH_REMOTE: https://github.com/regro-staging/cf-graph-countyfair.git
+  CF_PINNING_REMOTE: https://github.com/conda-forge-bot-staging/conda-forge-pinning-feedstock.git
+  PRUNE_DOCKER: false
+  PULL_DOCKER: false
+  UPDATE_PINNINGS: false
+
+jobs:
+  setup-repositories:
+    name: Set up Integration Tests
+    runs-on: ubuntu-latest
+    outputs:
+      scenario_ids: ${{ steps.setup_repositories.outputs.scenario_ids }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4
+        with:
+          path: cf-scripts
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@988b5a0280414f521da01fcc63a27aeeb4b104db # v3
+
+      - name: Build Docker Image
+        uses: docker/build-push-action@16ebe778df0e7752d2cfcbd924afdbbd89c1a755 # v6
+        with:
+          context: cf-scripts
+          push: false
+          load: true
+          tags: conda-forge-tick:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          outputs: type=docker,dest=/tmp/image.tar
+
+      - name: Upload Docker Image
+        uses: actions/upload-artifact@834a144ee995460fba8ed112a2fc961b36a5ec5a # v4
+        with:
+          name: conda-forge-tick
+          path: /tmp/image.tar
+
+      - name: setup-micromamba
+        uses: mamba-org/setup-micromamba@f8b8a1e23a26f60a44c853292711bacfd3eac822 # v1
+        with:
+          environment-file: cf-scripts/conda-lock.yml
+          environment-name: cf-scripts
+          condarc-file: cf-scripts/autotick-bot/condarc
+
+      - name: Set up Integration Test Repositories
+        id: setup_repositories
+        run: |
+          pushd cf-scripts
+          python -m tests_integration.setup_repositories
+
+  run-test-scenario:
+    name: Run Scenarios
+    runs-on: ubuntu-latest
+    needs: setup-repositories
+    strategy:
+      matrix:
+        scenario_id: ${{ fromJson(needs.setup-repositories.outputs.scenario_ids) }}
+      max-parallel: 1
+      fail-fast: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4
+        with:
+          path: cf-scripts
+
+      - name: Download Docker Image
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4
+        with:
+          name: conda-forge-tick
+          path: /tmp
+
+      - name: Load Docker Image
+        run: |
+          docker load --input /tmp/image.tar
+          docker image ls -a
+
+      - name: setup-micromamba
+        uses: mamba-org/setup-micromamba@f8b8a1e23a26f60a44c853292711bacfd3eac822 # v1
+        with:
+          environment-file: cf-scripts/conda-lock.yml
+          environment-name: cf-scripts
+          condarc-file: cf-scripts/autotick-bot/condarc
+
+      - name: Prepare Scenario
+        run: |
+          pushd cf-scripts
+          python -m tests_integration.step_prepare
+        env:
+          SCENARIO_ID: ${{ matrix.scenario_id }}
+
+      - name: Start HTTP Proxy
+        run: |
+          pushd cf-scripts
+          ./tests_integration/mock_proxy_start.sh &
+          sleep 10
+          # Install CA Certificate
+          sudo wget -e use_proxy=yes -e http_proxy=127.0.0.1:8080 -O /usr/local/share/ca-certificates/mitmproxy.crt \
+            http://mitm.it/cert/pem
+          sudo update-ca-certificates
+        env:
+          SCENARIO_ID: ${{ matrix.scenario_id }}
+          PYTHONPATH: ${{ github.workspace }}/cf-scripts
+
+      - name: Install Bot Code
+        run: |
+          source cf-scripts/autotick-bot/install_bot_code.sh
+        env:
+          # This is the first install, so we need to update the pinnings
+          UPDATE_PINNINGS: true
+
+      - name: "[Test] Gather all Feedstocks"
+        run: |
+          pushd cf-graph
+          conda-forge-tick --debug gather-all-feedstocks
+        env:
+          BOT_TOKEN: ${{ secrets.GH_TOKEN_STAGING_BOT_USER }}
+
+      - name: "[Test] Deploy to GitHub"
+        run: |
+          pushd cf-graph
+          conda-forge-tick --debug deploy-to-github
+        env:
+          # note that we need the token scoped for regro-staging
+          BOT_TOKEN: ${{ secrets.GH_TOKEN_STAGING_REGRO }}
+
+      - name: Reinstall Bot Code
+        run: |
+          source cf-scripts/tests_integration/clear_runner.sh
+          source cf-scripts/autotick-bot/install_bot_code.sh
+
+      - name: "[Test] Make Graph (Nodes and Edges)"
+        run: |
+          pushd cf-graph
+          conda-forge-tick --debug make-graph --update-nodes-and-edges
+
+      - name: "[Test] Deploy to GitHub"
+        run: |
+          pushd cf-graph
+          conda-forge-tick --debug deploy-to-github
+        env:
+          BOT_TOKEN: ${{ secrets.GH_TOKEN_STAGING_REGRO }}
+
+      - name: Reinstall Bot Code
+        run: |
+          source cf-scripts/tests_integration/clear_runner.sh
+          source cf-scripts/autotick-bot/install_bot_code.sh
+
+      - name: "[Test] Make Graph (Node Attributes)"
+        run: |
+          pushd cf-graph
+          conda-forge-tick --debug make-graph
+
+      - name: "[Test] Deploy to GitHub"
+        run: |
+          pushd cf-graph
+          conda-forge-tick --debug deploy-to-github
+        env:
+          BOT_TOKEN: ${{ secrets.GH_TOKEN_STAGING_REGRO }}
+
+      - name: Reinstall Bot Code
+        run: |
+          source cf-scripts/tests_integration/clear_runner.sh
+          source cf-scripts/autotick-bot/install_bot_code.sh
+
+      - name: "[Test] update_upstream_versions"
+        run: |
+          pushd cf-graph
+          conda-forge-tick --debug update-upstream-versions
+
+      - name: "[Test] Deploy to GitHub"
+        run: |
+          pushd cf-graph
+          conda-forge-tick --debug deploy-to-github
+        env:
+          BOT_TOKEN: ${{ secrets.GH_TOKEN_STAGING_REGRO }}

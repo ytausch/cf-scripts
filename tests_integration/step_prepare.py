@@ -1,0 +1,63 @@
+"""
+After closing all open Pull Requests in the conda-forge staging organization,
+runs the prepare() method of all test cases of the current test scenario to prepare the test environment.
+
+Expects the scenario ID to be present in the environment variable named after ENV_TEST_SCENARIO_ID.
+"""
+
+import logging
+import os
+
+from github import Github
+
+from tests_integration.collect_test_scenarios import get_test_scenario
+from tests_integration.lib.integration_test_helper import IntegrationTestHelper
+from tests_integration.shared import (
+    ENV_TEST_SCENARIO_ID,
+    FEEDSTOCK_SUFFIX,
+    GitHubAccount,
+    get_github_token,
+    get_test_case_modules,
+    setup_logging,
+)
+
+LOGGER = logging.getLogger(__name__)
+
+
+def close_all_open_pull_requests():
+    github = Github(get_github_token(GitHubAccount.CONDA_FORGE_ORG))
+    org = github.get_organization(GitHubAccount.CONDA_FORGE_ORG)
+
+    for repo in org.get_repos():
+        if not repo.name.endswith(FEEDSTOCK_SUFFIX):
+            continue
+        for pr in repo.get_pulls(state="open"):
+            pr.create_issue_comment(
+                "Closing this PR because it is a leftover from a previous test run."
+            )
+            pr.edit(state="closed")
+
+
+def run_all_prepare_functions(scenario: dict[str, str]):
+    test_helper = IntegrationTestHelper()
+    for test_module in get_test_case_modules(scenario):
+        try:
+            logging.info("Preparing %s...", test_module.__name__)
+            test_module.prepare(test_helper)
+        except AttributeError:
+            raise AttributeError("The test case must define a prepare() function.")
+
+
+def main(scenario_id: int):
+    close_all_open_pull_requests()
+    scenario = get_test_scenario(scenario_id)
+
+    logging.info("Preparing test scenario %d...", scenario_id)
+    logging.info("Scenario: %s", scenario)
+
+    run_all_prepare_functions(scenario)
+
+
+if __name__ == "__main__":
+    setup_logging(logging.INFO)
+    main(int(os.environ[ENV_TEST_SCENARIO_ID]))

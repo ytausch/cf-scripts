@@ -30,6 +30,11 @@ from conda_forge_feedstock_ops.os_utils import (
 from conda_forge_tick.hashing import hash_url
 from conda_forge_tick.lazy_json_backends import loads
 from conda_forge_tick.recipe_parser import CONDA_SELECTOR, CondaMetaYAML
+from conda_forge_tick.settings import (
+    ENV_CONDA_FORGE_ORG,
+    ENV_GRAPH_GITHUB_BACKEND_REPO,
+    settings,
+)
 from conda_forge_tick.url_transforms import gen_transformed_urls
 from conda_forge_tick.utils import sanitize_string
 
@@ -168,7 +173,6 @@ def _try_pypi_api(url_tmpl: str, context: MutableMapping, hash_type: str, cmeta:
     new_hash : str or None
         The new hash if found.
     """
-
     if "version" not in context:
         return None, None
 
@@ -642,9 +646,13 @@ def _update_version_feedstock_dir_containerized(feedstock_dir, version, hash_typ
 
         chmod_plus_rwX(tmpdir, recursive=True)
 
-        logger.debug(f"host feedstock dir {feedstock_dir}: {os.listdir(feedstock_dir)}")
         logger.debug(
-            f"copied host feedstock dir {tmp_feedstock_dir}: {os.listdir(tmp_feedstock_dir)}"
+            "host feedstock dir %s: %s", feedstock_dir, os.listdir(feedstock_dir)
+        )
+        logger.debug(
+            "copied host feedstock dir %s: %s",
+            tmp_feedstock_dir,
+            os.listdir(tmp_feedstock_dir),
         )
 
         args = [
@@ -662,6 +670,12 @@ def _update_version_feedstock_dir_containerized(feedstock_dir, version, hash_typ
             mount_readonly=False,
             mount_dir=tmpdir,
             json_loads=loads,
+            extra_container_args=[
+                "-e",
+                f"{ENV_CONDA_FORGE_ORG}={settings().conda_forge_org}",
+                "-e",
+                f"{ENV_GRAPH_GITHUB_BACKEND_REPO}={settings().graph_github_backend_repo}",
+            ],
         )
 
         sync_dirs(

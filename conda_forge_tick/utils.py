@@ -41,6 +41,7 @@ from conda_forge_feedstock_ops.container_utils import (
 from . import sensitive_env
 from .lazy_json_backends import LazyJson
 from .recipe_parser import CondaMetaYAML
+from .settings import ENV_CONDA_FORGE_ORG, ENV_GRAPH_GITHUB_BACKEND_REPO, settings
 
 if typing.TYPE_CHECKING:
     from mypy_extensions import TypedDict
@@ -183,12 +184,12 @@ def fold_log_lines(title):
 
 
 def yaml_safe_load(stream):
-    """Load a yaml doc safely"""
+    """Load a yaml doc safely."""
     return ruamel.yaml.YAML(typ="safe", pure=True).load(stream)
 
 
 def yaml_safe_dump(data, stream=None):
-    """Dump a yaml object"""
+    """Dump a yaml object."""
     yaml = ruamel.yaml.YAML(typ="safe", pure=True)
     yaml.default_flow_style = False
     return yaml.dump(data, stream=stream)
@@ -208,7 +209,6 @@ def _render_meta_yaml(text: str, for_pinning: bool = False, **kwargs) -> str:
         The text of the meta.yaml with Jinja2 variables replaced.
 
     """
-
     cfg = dict(**kwargs)
 
     env = jinja2.sandbox.SandboxedEnvironment(undefined=NullUndefined)
@@ -324,6 +324,12 @@ def parse_recipe_yaml_containerized(
         args,
         input=text,
         mount_readonly=True,
+        extra_container_args=[
+            "-e",
+            f"{ENV_CONDA_FORGE_ORG}={settings().conda_forge_org}",
+            "-e",
+            f"{ENV_GRAPH_GITHUB_BACKEND_REPO}={settings().graph_github_backend_repo}",
+        ],
     )
 
 
@@ -407,8 +413,12 @@ def parse_recipe_yaml_local(
     dict :
         The parsed YAML dict. If parsing fails, returns an empty dict. May raise
         for some errors. Have fun.
-    """
 
+    Raises
+    ------
+    RuntimeError
+        If the recipe YAML rendering fails or no output recipes are found.
+    """
     rendered_recipes = _render_recipe_yaml(
         text, cbc_path=cbc_path, platform_arch=platform_arch
     )
@@ -451,7 +461,7 @@ def _render_recipe_yaml(
     cbc_path: str | None = None,
 ) -> list[dict[str, Any]]:
     """
-    Renders the given recipe YAML text using the `rattler-build` command-line tool.
+    Render the given recipe YAML text using the `rattler-build` command-line tool.
 
     Parameters
     ----------
@@ -514,7 +524,7 @@ def _process_recipe_for_pinning(recipes: list[dict[str, Any]]) -> list[dict[str,
 def _parse_recipes(
     validated_recipes: list[dict[str, Any]],
 ) -> "RecipeTypedDict":
-    """Parses validated recipes and transform them to fit `RecipeTypedDict`
+    """Parse validated recipes and transform them to fit `RecipeTypedDict`.
 
     Parameters
     ----------
@@ -632,8 +642,7 @@ def _parse_recipes(
 
 
 def _parse_recipe_yaml_requirements(requirements) -> None:
-    """Parse requirement section of render by rattler-build to fit `RecipeTypedDict`
-
+    """Parse requirement section of render by rattler-build to fit `RecipeTypedDict`.
 
     When rendering the recipe by rattler build,
     `requirements["run_exports"]["weak"]` gives a list looking like:
@@ -684,6 +693,39 @@ def _remove_none_values(d):
     if not isinstance(d, dict):
         return d
     return {k: _remove_none_values(v) for k, v in d.items() if v is not None}
+
+
+def get_recipe_schema_version(feedstock_attrs: Mapping[str, Any]) -> int:
+    """
+    Get the recipe schema version from the feedstock attributes.
+
+    Parameters
+    ----------
+    feedstock_attrs : Mapping[str, Any]
+        The feedstock attributes.
+
+    Returns
+    -------
+    int
+        The recipe version. If it does not exist in the feedstock attributes,
+        it defaults to 0.
+
+    Raises
+    ------
+    ValueError
+        If the recipe version is not an integer, i.e. the attributes are invalid.
+    """
+    version = get_keys_default(
+        feedstock_attrs,
+        ["meta_yaml", "schema_version"],
+        {},
+        0,
+    )
+
+    if not isinstance(version, int):
+        raise ValueError("Recipe version is not an integer")
+
+    return version
 
 
 def parse_meta_yaml(
@@ -811,6 +853,12 @@ def parse_meta_yaml_containerized(
             input=text,
             mount_readonly=True,
             mount_dir=_mount_dir,
+            extra_container_args=[
+                "-e",
+                f"{ENV_CONDA_FORGE_ORG}={settings().conda_forge_org}",
+                "-e",
+                f"{ENV_GRAPH_GITHUB_BACKEND_REPO}={settings().graph_github_backend_repo}",
+            ],
         )
 
     if (cbc_path is not None and os.path.exists(cbc_path)) or (
@@ -872,6 +920,11 @@ def parse_meta_yaml_local(
     dict :
         The parsed YAML dict. If parsing fails, returns an empty dict. May raise
         for some errors. Have fun.
+
+    Raises
+    ------
+    RuntimeError
+        If parsing fails.
     """
 
     def _run(*, use_orig_cbc_path):
@@ -957,12 +1010,10 @@ def _parse_meta_yaml_impl(
 
             def _run_parsing():
                 logger.debug(
-                    "parsing for platform %s with cbc %s and arch %s"
-                    % (
-                        platform,
-                        cbc_path,
-                        arch,
-                    ),
+                    "parsing for platform %s with cbc %s and arch %s",
+                    platform,
+                    cbc_path,
+                    arch,
                 )
                 config = conda_build.config.get_or_merge_config(
                     None,
@@ -1149,8 +1200,15 @@ def load_existing_graph(filename: str = DEFAULT_GRAPH_FILENAME) -> nx.DiGraph:
     If empty JSON is encountered, a ValueError is raised.
     If you expect the graph to be possibly empty JSON (i.e. not initialized), use load_graph.
 
-    :return: the graph
-    :raises ValueError if the file contains empty JSON (or did not exist before)
+    Returns
+    -------
+    nx.DiGraph
+        The graph loaded from the file.
+
+    Raises
+    ------
+    ValueError
+        If the file contains empty JSON.
     """
     gx = load_graph(filename)
     if gx is None:
@@ -1159,13 +1217,14 @@ def load_existing_graph(filename: str = DEFAULT_GRAPH_FILENAME) -> nx.DiGraph:
 
 
 def load_graph(filename: str = DEFAULT_GRAPH_FILENAME) -> Optional[nx.DiGraph]:
-    """
-    Load the graph from a file using the lazy json backend.
+    """Load the graph from a file using the lazy json backend.
     If the file does not exist, it is initialized with empty JSON.
     If you expect the graph to be non-empty JSON, use load_existing_graph.
 
-    :return: the graph, or None if the file is empty JSON (or
-    :raises FileNotFoundError if the file does not exist
+    Returns
+    -------
+    nx.DiGraph or None
+        The graph, or None if the file is empty JSON
     """
     dta = copy.deepcopy(LazyJson(filename).data)
     if dta:
@@ -1223,16 +1282,19 @@ def as_iterable(x: T) -> Tuple[T]: ...
 
 @typing.no_type_check
 def as_iterable(iterable_or_scalar):
-    """Utility for converting an object to an iterable.
+    """Convert an object into an iterable.
+
     Parameters
     ----------
     iterable_or_scalar : anything
+
     Returns
     -------
     l : iterable
         If `obj` was None, return the empty tuple.
         If `obj` was not iterable returns a 1-tuple containing `obj`.
         Otherwise return `obj`
+
     Notes
     -----
     Although both string types and dictionaries are iterable in Python, we are
@@ -1240,7 +1302,7 @@ def as_iterable(iterable_or_scalar):
     returns (dict, ) and as_iterable(string) returns (string, )
 
     Examples
-    ---------
+    --------
     >>> as_iterable(1)
     (1,)
     >>> as_iterable([1, 2, 3])
@@ -1250,7 +1312,6 @@ def as_iterable(iterable_or_scalar):
     >>> as_iterable({'a': 1})
     ({'a': 1}, )
     """
-
     if iterable_or_scalar is None:
         return ()
     elif isinstance(iterable_or_scalar, (str, bytes)):
@@ -1314,20 +1375,39 @@ def change_log_level(logger, new_level):
         logger.setLevel(saved_logger_level)
 
 
-def run_command_hiding_token(args: list[str], token: str) -> int:
-    """
-    Run a command and hide the token in the output.
+def run_command_hiding_token(args: list[str], token: str, **kwargs) -> int:
+    """Run a command and hide the token in the output.
 
     Prints the outputs (stdout and stderr) of the subprocess.CompletedProcess object.
     The token or tokens will be replaced with a string of asterisks of the same length.
 
     If stdout or stderr is None, it will not be printed.
 
-    :param args: The command to run.
-    :param token: The token to hide in the output.
-    :return: The return code of the command.
+    Parameters
+    ----------
+    args
+        The command to run.
+    token
+        The token to hide in the output.
+    kwargs
+        additional arguments for subprocess.run
+
+    Returns
+    -------
+    int
+        The return code of the command.
+
+    Raises
+    ------
+    ValueError
+        If the kwargs contain 'text', 'stdout', or 'stderr'.
     """
-    p = subprocess.run(args, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if kwargs.keys() & {"text", "stdout", "stderr"}:
+        raise ValueError("text, stdout, and stderr are not allowed in kwargs")
+
+    p = subprocess.run(
+        args, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **kwargs
+    )
 
     out, err = p.stdout, p.stderr
 
@@ -1351,7 +1431,7 @@ def extract_section_from_yaml_text(
     section_name: str,
     exclude_requirements: bool = False,
 ) -> list[str]:
-    """Extract a section from YAML as text
+    """Extract a section from YAML as text.
 
     Parameters
     ----------
@@ -1370,7 +1450,15 @@ def extract_section_from_yaml_text(
         A list of strings for the extracted sections.
     """
     # normalize the indents etc.
-    yaml_text = CondaMetaYAML(yaml_text).dumps()
+    try:
+        yaml_text = CondaMetaYAML(yaml_text).dumps()
+    except Exception as e:
+        logger.debug(
+            "Failed to normalize the YAML text due to error %s. We will try to parse anyways!",
+            repr(e),
+        )
+        pass
+
     lines = yaml_text.splitlines()
 
     in_requirements = False

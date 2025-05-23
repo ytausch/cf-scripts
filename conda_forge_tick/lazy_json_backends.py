@@ -31,6 +31,7 @@ import requests
 
 from .cli_context import CliContext
 from .executors import lock_git_operation
+from .settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -56,15 +57,11 @@ CF_TICK_GRAPH_DATA_HASHMAPS = [
     "migrators",
 ]
 
-CF_TICK_GRAPH_GITHUB_BACKEND_REPO = "regro/cf-graph-countyfair"
-CF_TICK_GRAPH_GITHUB_BACKEND_BASE_URL = (
-    f"https://github.com/{CF_TICK_GRAPH_GITHUB_BACKEND_REPO}/raw/master"
-)
 CF_TICK_GRAPH_GITHUB_BACKEND_NUM_DIRS = 5
 
 
 def get_sharded_path(file_path, n_dirs=CF_TICK_GRAPH_GITHUB_BACKEND_NUM_DIRS):
-    """computed a sharded location for the LazyJson file."""
+    """Compute a sharded location for the LazyJson file."""
     top_dir, file_name = os.path.split(file_path)
 
     if len(top_dir) == 0 or top_dir == "lazy_json":
@@ -207,7 +204,7 @@ class GithubLazyJsonBackend(LazyJsonBackend):
     _n_requests = 0
 
     def __init__(self) -> None:
-        self.base_url = CF_TICK_GRAPH_GITHUB_BACKEND_BASE_URL
+        self._base_url = settings().graph_github_backend_raw_base_url
 
     @property
     def base_url(self) -> str:
@@ -231,7 +228,7 @@ class GithubLazyJsonBackend(LazyJsonBackend):
         cls._n_requests += 1
         if cls._n_requests % 20 == 0:
             logger.info(
-                f"Made {cls._n_requests} requests to the GitHub online backend.",
+                "Made %d requests to the GitHub online backend.", cls._n_requests
             )
         if cls._n_requests == 20:
             logger.warning(
@@ -327,7 +324,7 @@ class GithubAPILazyJsonBackend(LazyJsonBackend):
         from conda_forge_tick.git_utils import github_client
 
         self._gh = github_client()
-        self._repo = self._gh.get_repo(CF_TICK_GRAPH_GITHUB_BACKEND_REPO)
+        self._repo = self._gh.get_repo(settings().graph_github_backend_repo)
 
     @contextlib.contextmanager
     def transaction_context(self) -> "Iterator[FileLazyJsonBackend]":
@@ -499,7 +496,7 @@ class GithubAPILazyJsonBackend(LazyJsonBackend):
         for tr in range(ntries):
             try:
                 cnts = requests.get(
-                    f"https://api.github.com/repos/{CF_TICK_GRAPH_GITHUB_BACKEND_REPO}/contents/{pth}",
+                    f"https://api.github.com/repos/{settings().graph_github_backend_repo}/contents/{pth}",
                     headers=hrds,
                 )
                 cnts.raise_for_status()
@@ -943,7 +940,7 @@ def sync_lazy_json_object(
 
 
 class LazyJson(MutableMapping):
-    """Lazy load a dict from a json file and save it when updated"""
+    """Lazy load a dict from a json file and save it when updated."""
 
     def __init__(self, file_name: str):
         self.file_name = file_name
@@ -1083,7 +1080,13 @@ class LazyJson(MutableMapping):
 
 
 def default(obj: Any) -> Any:
-    """For custom object serialization."""
+    """For custom object serialization.
+
+    Raises
+    ------
+    TypeError
+        If the object is not JSON serializable.
+    """
     if isinstance(obj, LazyJson):
         return {"__lazy_json__": obj.file_name}
     elif isinstance(obj, Set):
@@ -1112,7 +1115,7 @@ def dumps(
     obj: Any,
     default: "Callable[[Any], Any]" = default,
 ) -> str:
-    """Returns a JSON string from a Python object."""
+    """Return a JSON string from a Python object."""
     return orjson.dumps(
         obj,
         option=orjson.OPT_SORT_KEYS | orjson.OPT_INDENT_2,
@@ -1125,7 +1128,7 @@ def dump(
     fp: IO[str],
     default: "Callable[[Any], Any]" = default,
 ) -> None:
-    """Returns a JSON string from a Python object."""
+    """Return a JSON string from a Python object."""
     return fp.write(dumps(obj, default=default))
 
 
@@ -1145,7 +1148,7 @@ def _call_object_hook(
 
 
 def loads(s: str, object_hook: "Callable[[dict], Any]" = object_hook) -> dict:
-    """Loads a string as JSON, with appropriate object hooks"""
+    """Load a string as JSON, with appropriate object hooks."""
     data = orjson.loads(s)
     if object_hook is not None:
         data = _call_object_hook(data, object_hook)
@@ -1156,7 +1159,7 @@ def load(
     fp: IO[str],
     object_hook: "Callable[[dict], Any]" = object_hook,
 ) -> dict:
-    """Loads a file object as JSON, with appropriate object hooks."""
+    """Load a file object as JSON, with appropriate object hooks."""
     return loads(fp.read())
 
 

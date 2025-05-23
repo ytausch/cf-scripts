@@ -8,9 +8,9 @@ from typing import Any, Dict
 import requests
 from ruamel.yaml import YAML
 
-from conda_forge_tick.lazy_json_backends import CF_TICK_GRAPH_GITHUB_BACKEND_BASE_URL
 from conda_forge_tick.migrators.core import MiniMigrator, skip_migrator_due_to_schema
 from conda_forge_tick.os_utils import pushd
+from conda_forge_tick.settings import settings
 from conda_forge_tick.utils import get_keys_default
 
 if typing.TYPE_CHECKING:
@@ -21,14 +21,17 @@ logger = logging.getLogger(__name__)
 
 @functools.lru_cache()
 def pypi_conda_mapping() -> Dict[str, str]:
-    """Retrieves the most recent version of the pypi-conda name mapping dictionary.
+    """Retrieve the most recent version of the pypi-conda name mapping dictionary.
 
-    Result is a dictionary {pypi_name: conda_name}
+    Returns
+    -------
+    Dict[str, str]
+        Format: {pypi_name: conda_name}
     """
     yaml = YAML()
     content = requests.get(
         os.path.join(
-            CF_TICK_GRAPH_GITHUB_BACKEND_BASE_URL,
+            settings().graph_github_backend_raw_base_url,
             "mappings",
             "pypi",
             "grayskull_pypi_mapping.yaml",
@@ -71,7 +74,7 @@ class PipWheelMigrator(MiniMigrator):
             return True
 
         version: str = self._get_version(attrs)
-        logger.debug(f"Checking if PyPI has a wheel for {version}")
+        logger.debug("Checking if PyPI has a wheel for %s", version)
         wheel_url, _ = self.determine_wheel(source_url, version)
 
         if wheel_url is None:

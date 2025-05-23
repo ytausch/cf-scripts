@@ -11,6 +11,7 @@ from conda_forge_tick.utils import (
     _munge_dict_repr,
     extract_section_from_yaml_text,
     get_keys_default,
+    get_recipe_schema_version,
     load_existing_graph,
     load_graph,
     parse_munged_run_export,
@@ -121,7 +122,9 @@ def test_load_graph_file_does_not_exist(exists_mock: MagicMock):
     mock_file.assert_has_calls([mock.call(DEFAULT_GRAPH_FILENAME, "w")])
 
 
-def test_load_existing_graph():
+@mock.patch("os.path.isfile")
+def test_load_existing_graph(isfile_mock: MagicMock):
+    isfile_mock.return_value = True
     with mock.patch("builtins.open", mock_open(read_data=DEMO_GRAPH)) as mock_file:
         gx = load_existing_graph()
 
@@ -153,6 +156,35 @@ def test_munge_dict_repr():
     d = {"a": 1, "b": 2, "weak": [1, 2, 3], "strong": {"a": 1, "b": 2}}
     print(_munge_dict_repr(d))
     assert parse_munged_run_export(_munge_dict_repr(d)) == d
+
+
+@pytest.mark.parametrize("version", [0, 1])
+def test_get_recipe_schema_version_valid(version: int):
+    attrs = {
+        "meta_yaml": {
+            "schema_version": version,
+        }
+        if version is not None
+        else {},
+    }
+
+    assert get_recipe_schema_version(attrs) == version
+
+
+def test_get_recipe_schema_version_missing_keys_1():
+    attrs = {"meta_yaml": {}}
+    assert get_recipe_schema_version(attrs) == 0
+
+
+def test_get_recipe_schema_version_missing_keys_2():
+    attrs = {}
+    assert get_recipe_schema_version(attrs) == 0
+
+
+def test_get_recipe_schema_version_invalid():
+    attrs = {"meta_yaml": {"schema_version": "invalid"}}
+    with pytest.raises(ValueError, match="Recipe version is not an integer"):
+        get_recipe_schema_version(attrs)
 
 
 def test_run_command_hiding_token():

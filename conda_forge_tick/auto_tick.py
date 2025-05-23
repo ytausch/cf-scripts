@@ -72,10 +72,10 @@ from conda_forge_tick.utils import (
 
 from .migrators_types import MigrationUidTypedDict
 from .models.pr_json import PullRequestData, PullRequestInfoSpecial, PullRequestState
+from .settings import settings
 
 logger = logging.getLogger(__name__)
 
-BOT_HOME_DIR: str = os.getcwd()
 START_TIME = None
 TIMEOUT = int(os.environ.get("TIMEOUT", 600))
 
@@ -155,22 +155,34 @@ def _prepare_feedstock_repository(
 
     Any errors are written to the pr_info attribute of the feedstock context and logged.
 
-    :param backend: The GitPlatformBackend instance to use.
-    :param context: The current context
-    :param branch: The branch to create in the forked repository.
-    :param base_branch: The base branch to branch from.
-    :return: True if the repository was successfully prepared, False otherwise.
+    Parameters
+    ----------
+    backend
+        The GitPlatformBackend instance to use.
+    context
+        The current context
+    branch
+        The branch to create in the forked repository.
+    base_branch
+        The base branch to branch from.
+
+    Returns
+    -------
+    bool
+        True if the repository was successfully prepared, False otherwise.
     """
     try:
         backend.fork(context.git_repo_owner, context.git_repo_name)
     except RepositoryNotFoundError:
         logger.warning(
-            f"Could not fork {context.git_repo_owner}/{context.git_repo_name}: Not Found"
+            "Could not fork %s/%s: Not Found",
+            context.git_repo_owner,
+            context.git_repo_name,
         )
 
         error_message = f"{context.feedstock_name}: Git repository not found."
         logger.critical(
-            f"Failed to migrate {context.feedstock_name}, {error_message}",
+            "Failed to migrate %s, %s", context.feedstock_name, error_message
         )
 
         with context.attrs["pr_info"] as pri:
@@ -198,12 +210,24 @@ def _commit_migration(
     """
     Commit a migration that has been run in the local clone of a feedstock repository.
     If an error occurs during the commit, it is logged.
-    :param cli: The GitCli instance to use.
-    :param context: The FeedstockContext instance.
-    :param commit_message: The commit message to use.
-    :param allow_empty_commits: Whether the migrator allows empty commits.
-    :param raise_commit_errors: Whether to raise an exception if an error occurs during the commit.
-    :raises GitCliError: If an error occurs during the commit and raise_commit_errors is True.
+
+    Parameters
+    ----------
+    cli
+        The GitCli instance to use.
+    context
+        The FeedstockContext instance.
+    commit_message
+        The commit message to use.
+    allow_empty_commits
+        Whether the migrator allows empty commits.
+    raise_commit_errors
+        Whether to raise an exception if an error occurs during the commit.
+
+    Raises
+    ------
+    GitCliError
+        If an error occurs during the commit and raise_commit_errors is True.
     """
     cli.add(
         context.local_clone_dir,
@@ -223,9 +247,7 @@ def _commit_migration(
 
 @dataclass(frozen=True)
 class _RerenderInfo:
-    """
-    Additional information about a rerender operation.
-    """
+    """Additional information about a rerender operation."""
 
     nontrivial_changes: bool
     """
@@ -289,10 +311,17 @@ def _should_automerge(migrator: Migrator, context: FeedstockContext) -> bool:
     """
     Determine if a migration should be auto merged based on the feedstock and migrator settings.
 
-    :param migrator: The migrator to check.
-    :param context: The feedstock context.
+    Parameters
+    ----------
+    migrator
+        The migrator to check.
+    context
+        The feedstock context.
 
-    :return: True if the migrator should be auto merged, False otherwise.
+    Returns
+    -------
+    bool
+        True if the migrator should be auto merged, False otherwise.
     """
     if isinstance(migrator, Version):
         return context.automerge in [True, "version"]
@@ -393,12 +422,20 @@ def _check_and_process_solvability(
     by setting the corresponding fields in the feedstock attributes.
     If the recipe is solvable, reset the fields that track the solvability check status.
 
-    :param migrator: The migrator that was run
-    :param context: The current FeedstockContext of the feedstock that was migrated
-    :param base_branch: The branch of the feedstock repository that is the migration target
+    Parameters
+    ----------
+    migrator
+        The migrator that was run
+    context
+        The current FeedstockContext of the feedstock that was migrated
+    base_branch
+        The branch of the feedstock repository that is the migration target
 
-    :returns: True if the migration can proceed normally, False if a required solvability check failed and the migration
-    needs to be aborted
+    Returns
+    -------
+    bool
+        True if the migration can proceed normally, False if a required solvability check failed and the migration
+        needs to be aborted
     """
     if not _is_solvability_check_needed(migrator, context, base_branch):
         return True
@@ -483,7 +520,7 @@ def run(
     base_branch: str = "main",
     **kwargs: typing.Any,
 ) -> tuple[MigrationUidTypedDict, dict] | tuple[Literal[False], Literal[False]]:
-    """For a given feedstock and migration run the migration
+    """For a given feedstock and migration run the migration.
 
     Parameters
     ----------
@@ -507,10 +544,6 @@ def run(
     pr_json: dict
         The PR json object for recreating the PR as needed
     """
-
-    # sometimes we get weird directory issues so make sure we reset
-    os.chdir(BOT_HOME_DIR)
-
     migrator_name = get_migrator_name(migrator)
     is_version_migration = isinstance(migrator, Version)
     _increment_pre_pr_migrator_attempt(
@@ -634,8 +667,11 @@ def run(
         except DuplicatePullRequestError:
             # This shouldn't happen too often anymore since we won't double PR
             logger.warning(
-                f"Attempted to create a duplicate PR for merging {git_backend.user}:{branch_name} "
-                f"into {context.git_repo_owner}:{base_branch}. Ignoring."
+                "Attempted to create a duplicate PR for merging %s:%s into %s:%s. Ignoring.",
+                git_backend.user,
+                branch_name,
+                context.git_repo_owner,
+                base_branch,
             )
             # Don't update the PR data
             pr_data = None
@@ -737,20 +773,14 @@ def _run_migrator_on_feedstock_branch(
     sync_version_pr_info = False
     is_version = isinstance(migrator, Version)
     try:
-        try:
-            fctx.attrs["new_version"] = attrs.get("version_pr_info", {}).get(
-                "new_version", None
-            )
-            migrator_uid, pr_json = run_with_tmpdir(
-                context=fctx,
-                migrator=migrator,
-                git_backend=git_backend,
-                rerender=migrator.rerender,
-                base_branch=base_branch,
-                hash_type=attrs.get("hash_type", "sha256"),
-            )
-        finally:
-            fctx.attrs.pop("new_version", None)
+        migrator_uid, pr_json = run_with_tmpdir(
+            context=fctx,
+            migrator=migrator,
+            git_backend=git_backend,
+            rerender=migrator.rerender,
+            base_branch=base_branch,
+            hash_type=attrs.get("hash_type", "sha256"),
+        )
 
         # if migration successful
         if migrator_uid:
@@ -959,6 +989,7 @@ def _is_migrator_done(_mg_start, good_prs, time_per, pr_limit, tried_prs):
 
 def _run_migrator(migrator, mctx, temp, time_per, git_backend: GitPlatformBackend):
     _mg_start = time.time()
+    initial_working_dir = os.getcwd()
 
     migrator_name = get_migrator_name(migrator)
 
@@ -1047,6 +1078,7 @@ def _run_migrator(migrator, mctx, temp, time_per, git_backend: GitPlatformBacken
             fctx = FeedstockContext(
                 feedstock_name=attrs["feedstock_name"],
                 attrs=attrs,
+                git_repo_owner=settings().conda_forge_org,
             )
 
             # map main to current default branch
@@ -1101,7 +1133,7 @@ def _run_migrator(migrator, mctx, temp, time_per, git_backend: GitPlatformBacken
                 gc.collect()
 
                 # sometimes we get weird directory issues so make sure we reset
-                os.chdir(BOT_HOME_DIR)
+                os.chdir(initial_working_dir)
 
                 # Write graph partially through
                 dump_graph(mctx.graph)
@@ -1130,8 +1162,7 @@ def _setup_limits():
 
 
 def _update_nodes_with_bot_rerun(gx: nx.DiGraph):
-    """Go through all the open PRs and check if they are rerun"""
-
+    """Go through all the open PRs and check if they are rerun."""
     print("processing bot-rerun labels", flush=True)
 
     for i, (name, node) in enumerate(gx.nodes.items()):
@@ -1154,7 +1185,9 @@ def _update_nodes_with_bot_rerun(gx: nx.DiGraph):
                             # maybe add a pass check info here ? (if using DEBUG)
                         except Exception as e:
                             logger.error(
-                                f"BOT-RERUN : could not proceed check with {node}, {e}",
+                                "BOT-RERUN : could not proceed check with %s",
+                                node,
+                                exc_info=e,
                             )
                             raise e
                         # if there is a valid PR and it isn't currently listed as rerun
@@ -1191,8 +1224,7 @@ def _filter_ignored_versions(attrs, version):
 
 
 def _update_nodes_with_new_versions(gx):
-    """Updates every node with it's new version (when available)"""
-
+    """Update every node with it's new version (when available)."""
     print("updating nodes with new versions", flush=True)
 
     version_nodes = get_all_keys_for_hashmap("versions")

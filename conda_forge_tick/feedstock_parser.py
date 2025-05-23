@@ -19,6 +19,12 @@ from conda_forge_feedstock_ops.container_utils import (
 )
 from requests.models import Response
 
+from conda_forge_tick.settings import (
+    ENV_CONDA_FORGE_ORG,
+    ENV_GRAPH_GITHUB_BACKEND_REPO,
+    settings,
+)
+
 if typing.TYPE_CHECKING:
     from mypy_extensions import TestTypedDict
 
@@ -82,7 +88,7 @@ def _get_requirements(
     run: bool = True,
     outputs_to_keep: Optional[Set["PackageName"]] = None,
 ) -> "Set[PackageName]":
-    """Get the list of recipe requirements from a meta.yaml dict
+    """Get the list of recipe requirements from a meta.yaml dict.
 
     Parameters
     ----------
@@ -122,7 +128,7 @@ def _parse_requirements(
     host: bool = True,
     run: bool = True,
 ) -> typing.MutableSet["PackageName"]:
-    """Flatten a YAML requirements section into a list of names"""
+    """Flatten a YAML requirements section into a list of names."""
     if not req:  # handle None as empty
         return set()
     if isinstance(req, list):  # simple list goes to both host and run
@@ -192,7 +198,7 @@ def _fetch_static_repo(name, dest):
     for branch in ["main", "master"]:
         try:
             r = requests.get(
-                f"https://github.com/conda-forge/{name}-feedstock/archive/{branch}.zip",
+                f"https://github.com/{settings().conda_forge_org}/{name}-feedstock/archive/{branch}.zip",
             )
             r.raise_for_status()
             found_branch = branch
@@ -202,7 +208,7 @@ def _fetch_static_repo(name, dest):
 
     if r.status_code != 200:
         logger.error(
-            f"Something odd happened when fetching feedstock {name}: {r.status_code}",
+            "Something odd happened when fetching feedstock %s: %d", name, r.status_code
         )
         return r
 
@@ -244,15 +250,36 @@ def populate_feedstock_attributes(
     """
     Parse the various configuration information into the node_attrs of a feedstock.
 
-    :param name: The name of the feedstock
-    :param existing_node_attrs: The existing node_attrs of the feedstock. Pass an empty dict if none.
-    :param meta_yaml: The meta.yaml file as a string
-    :param recipe_yaml: The recipe.yaml file as a string
-    :param conda_forge_yaml: The conda-forge.yaml file as a string
-    :param mark_not_archived: If True, forcibly mark the feedstock as not archived in the node attrs, even if it is archived.
-    :param feedstock_dir: The directory where the feedstock is located. If None, some information will not be available.
+    Parameters
+    ----------
+    name
+        The name of the feedstock.
+    existing_node_attrs
+        The existing node_attrs of the feedstock. Pass an empty dict if none.
+    meta_yaml
+        The meta.yaml file as a string.
+    recipe_yaml
+        The recipe.yaml file as a string.
+    conda_forge_yaml
+        The conda-forge.yaml file as a string.
+    mark_not_archived
+        If True, forcibly mark the feedstock as not archived in the node attrs,
+        even if it is archived.
+    feedstock_dir
+        The directory where the feedstock is located. If None, some information
+        will not be available.
 
-    :return: A dictionary with the new node_attrs of the feedstock, with only some fields populated.
+    Returns
+    -------
+    dict[str, Any]
+        A dictionary with the new node_attrs of the feedstock, with only some
+        fields populated.
+
+    Raises
+    ------
+    ValueError
+        If both `meta_yaml` and `recipe_yaml` are provided.
+        If neither `meta_yaml` nor `recipe_yaml` are provided.
     """
     from conda_forge_tick.chaindb import ChainDB, _convert_to_dict
 
@@ -316,7 +343,7 @@ def populate_feedstock_attributes(
             variant_yamls = []
             plat_archs = []
             for cbc_path in ci_support_files:
-                logger.debug(f"parsing conda-build config: {cbc_path}")
+                logger.debug("parsing conda-build config: %s", cbc_path)
                 cbc_name = cbc_path.name
                 cbc_name_parts = cbc_name.replace(".yaml", "").split("_")
                 plat = cbc_name_parts[0]
@@ -367,7 +394,7 @@ def populate_feedstock_attributes(
 
                 # sometimes the requirements come out to None or [None]
                 # and this ruins the aggregated meta_yaml / breaks stuff
-                logger.debug(f"getting reqs for config: {cbc_path}")
+                logger.debug("getting reqs for config: %s", cbc_path)
                 if "requirements" in variant_yamls[-1]:
                     variant_yamls[-1]["requirements"] = _clean_req_nones(
                         variant_yamls[-1]["requirements"],
@@ -382,7 +409,7 @@ def populate_feedstock_attributes(
                             )
 
                 # collapse them down
-                logger.debug(f"collapsing reqs for {name}")
+                logger.debug("collapsing reqs for %s", name)
                 final_cfgs = {}
                 for plat_arch, varyml in zip(plat_archs, variant_yamls):
                     if plat_arch not in final_cfgs:
@@ -428,7 +455,7 @@ def populate_feedstock_attributes(
     sorted_variant_yamls = [x for _, x in sorted(zip(plat_archs, variant_yamls))]
     yaml_dict = ChainDB(*sorted_variant_yamls)
     if not yaml_dict:
-        logger.error(f"Something odd happened when parsing recipe {name}")
+        logger.error("Something odd happened when parsing recipe %s", name)
         node_attrs["parsing_error"] = (
             "feedstock parsing error: could not combine metadata dicts across platforms"
         )
@@ -552,6 +579,13 @@ def load_feedstock_local(
     -------
     sub_graph : MutableMapping
         The sub_graph, now updated with the feedstock metadata
+
+    Raises
+    ------
+    ValueError
+        If both `meta_yaml` and `recipe_yaml` are provided.
+        If neither `meta_yaml` nor `recipe_yaml` are provided and no file is present in
+        the feedstock.
     """
     new_sub_graph = {key: value for key, value in sub_graph.items()}
 
@@ -672,6 +706,12 @@ def load_feedstock_containerized(
         args,
         json_loads=loads,
         input=json_blob,
+        extra_container_args=[
+            "-e",
+            f"{ENV_CONDA_FORGE_ORG}={settings().conda_forge_org}",
+            "-e",
+            f"{ENV_GRAPH_GITHUB_BACKEND_REPO}={settings().graph_github_backend_repo}",
+        ],
     )
 
     return data
@@ -714,7 +754,6 @@ def load_feedstock(
     sub_graph : MutableMapping
         The sub_graph, now updated with the feedstock metadata
     """
-
     if should_use_container(use_container=use_container):
         return load_feedstock_containerized(
             name,

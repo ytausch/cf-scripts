@@ -24,6 +24,7 @@ from conda_forge_tick.lazy_json_backends import (
 from .all_feedstocks import get_all_feedstocks, get_archived_feedstocks
 from .cli_context import CliContext
 from .executors import executor
+from .settings import settings
 from .utils import as_iterable, dump_graph, load_graph, sanitize_string
 
 # from conda_forge_tick.profiler import profiling
@@ -33,8 +34,6 @@ logger = logging.getLogger(__name__)
 
 pin_sep_pat = re.compile(r" |>|<|=|\[")
 RNG = secrets.SystemRandom()
-
-RANDOM_FRAC_TO_UPDATE = 0.1
 
 # AFAIK, go and rust do not have strong run exports and so do not need to
 # appear here
@@ -200,7 +199,7 @@ def _build_graph_process_pool(
         futures = {
             pool.submit(get_attrs, name, mark_not_archived=mark_not_archived): name
             for name in names
-            if RNG.random() < RANDOM_FRAC_TO_UPDATE
+            if RNG.random() < settings().frac_make_graph
         }
         logger.info("submitted all nodes")
 
@@ -217,11 +216,14 @@ def _build_graph_process_pool(
                 f.result()
                 if n_left % 100 == 0:
                     logger.info(
-                        f"nodes left {n_left: >5d} - eta {int(eta): >5d}s: finished {name}"
+                        "nodes left %5d - eta %5ds: finished %s", n_left, int(eta), name
                     )
             except Exception as e:
                 logger.error(
-                    f"nodes left {n_left: >5d} - eta {int(eta): >5d}s: error adding {name} to the graph",
+                    "nodes left %5d - eta %5ds: error adding %s to the graph",
+                    n_left,
+                    int(eta),
+                    name,
                     exc_info=e,
                 )
 
@@ -231,13 +233,14 @@ def _build_graph_sequential(
     mark_not_archived=False,
 ) -> None:
     for name in names:
-        if RNG.random() >= RANDOM_FRAC_TO_UPDATE:
+        if RNG.random() >= settings().frac_make_graph:
+            logger.debug("skipping %s due to random fraction to update", name)
             continue
 
         try:
             get_attrs(name, mark_not_archived=mark_not_archived)
         except Exception as e:
-            logger.error(f"Error updating node {name}", exc_info=e)
+            logger.error("Error updating node %s", name, exc_info=e)
 
 
 def _get_all_deps_for_node(attrs, outputs_lut):
@@ -333,7 +336,7 @@ def _update_graph_nodes(
         mark_not_archived=mark_not_archived,
     )
     logger.info("feedstock fetch loop completed")
-    logger.info(f"memory usage: {psutil.virtual_memory()}")
+    logger.info("memory usage: %s", psutil.virtual_memory())
 
 
 def _update_nodes_with_archived(names):
@@ -366,9 +369,9 @@ def main(
     tot_names_for_this_job = _get_names_for_job(tot_names, job, n_jobs)
     names_for_this_job = _get_names_for_job(names, job, n_jobs)
     archived_names_for_this_job = _get_names_for_job(archived_names, job, n_jobs)
-    logger.info(f"total # of nodes across all backends: {len(tot_names)}")
-    logger.info(f"active nodes: {len(names)}")
-    logger.info(f"archived nodes: {len(archived_names)}")
+    logger.info("total # of nodes across all backends: %d", len(tot_names))
+    logger.info("active nodes: %d", len(names))
+    logger.info("archived nodes: %d", len(archived_names))
 
     if update_nodes_and_edges:
         gx = load_graph()

@@ -30,6 +30,7 @@ from conda_forge_tick.migrators import (
     OSXArm,
     Replacement,
     Version,
+    WinArm64,
 )
 from conda_forge_tick.os_utils import eval_cmd
 from conda_forge_tick.path_lengths import cyclic_topological_sort
@@ -53,7 +54,15 @@ GH_MERGE_STATE_STATUS = [
 
 
 def _sorted_set_json(obj: Any) -> Any:
-    """For custom object serialization."""
+    """If obj is a set, return sorted(obj). Else, raise TypeError.
+
+    Used for custom object serialization.
+
+    Raises
+    ------
+    TypeError
+        If obj is not a set.
+    """
     if isinstance(obj, Set):
         return sorted(obj)
     raise TypeError(repr(obj) + " is not JSON serializable")
@@ -64,8 +73,7 @@ def _ok_version(ver):
 
 
 def write_version_migrator_status(migrator, mctx):
-    """write the status of the version migrator"""
-
+    """Write the status of the version migrator."""
     out: Dict[str, Dict[str, str]] = {
         "queued": {},  # name -> pending version
         "errors": {},  # name -> error
@@ -100,11 +108,26 @@ def write_version_migrator_status(migrator, mctx):
                 else:
                     new_version = vpri.get("new_version", False)
 
+                try:
+                    if "new_version" in vpri:
+                        old_vpri_version = vpri["new_version"]
+                        had_vpri_version = True
+                    else:
+                        had_vpri_version = False
+
+                    vpri["new_version"] = new_version
+
+                    new_version_is_ok = _ok_version(
+                        new_version
+                    ) and not migrator.filter(attrs)
+                finally:
+                    if had_vpri_version:
+                        vpri["new_version"] = old_vpri_version
+                    else:
+                        del vpri["new_version"]
+
                 # run filter with new_version
-                if _ok_version(new_version) and not migrator.filter(
-                    attrs,
-                    new_version=new_version,
-                ):
+                if new_version_is_ok:
                     attempts = vpri.get("new_version_attempts", {}).get(new_version, 0)
                     if attempts == 0:
                         out["queued"][node] = new_version
@@ -144,8 +167,7 @@ def graph_migrator_status(
     migrator: Migrator,
     gx: nx.DiGraph,
 ) -> Tuple[dict, list, nx.DiGraph]:
-    """Gets the migrator progress for a given migrator"""
-
+    """Get the migrator progress for a given migrator."""
     migrator_name = get_migrator_name(migrator)
 
     num_viz = 0
@@ -455,6 +477,7 @@ def main() -> None:
                     mgconf.get("longterm", False)
                     or isinstance(migrator, ArchRebuild)
                     or isinstance(migrator, OSXArm)
+                    or isinstance(migrator, WinArm64)
                 ):
                     longterm_status[migrator_name] = f"{migrator.name} Migration Status"
                 else:
